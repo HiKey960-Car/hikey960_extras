@@ -48,21 +48,16 @@ void load(){
   // load key configuration from eeprom
   for (int i = 0; i < EEPROM.length();){
     byte type = EEPROM.read(i);
-    byte pin;
-    byte keycode;
-    int adcval;
-    if (type == 'A' && adc[pin].entries < 32){
-      pin = EEPROM.read(i+1);
-      keycode = EEPROM.read(i+2);
+    byte pin = EEPROM.read(i+1);
 
+    if (type == 'A' && adc[pin].entries < 32){
       adc[pin].keycode[adc[pin].entries] = EEPROM.read(i+2);
-      adc[pin].value[adc[pin].entries] = EEPROM.read(i+3)<<8 + EEPROM.read(i+4);
+      adc[pin].value[adc[pin].entries] = EEPROM.read(i+3)*256 + EEPROM.read(i+4);
 
       adc[pin].entries++;
 
       i+=5;
     } else if (type == 'D'){
-      pin = EEPROM.read(i+1);
       d[pin] = EEPROM.read(i+2);
       i+=3;
     } else break;    
@@ -72,7 +67,7 @@ void load(){
 void setup() {
   while (!Serial);
   delay(500);
-  Serial.begin(9600);
+  Serial.begin(115200);
   Serial.print("DEBUG(Begin serial output)\n");
 
   // Set all pins to input, pull up.
@@ -101,8 +96,10 @@ int lookup(int input, int value){
 void send_serial(boolean down, byte keycode){
   if (down) Serial.print("KEYDOWN(");
   else Serial.print("KEYUP(");
-  Serial.print(keycode, HEX);
-  Serial.println(")\n");
+  //Serial.print(keycode, HEX);
+  Serial.write(keycode);
+  Serial.print(")\n");
+  delay(200);
 }
 
 void print_hex(uint8_t *data, uint8_t length){
@@ -119,7 +116,9 @@ void loop() {
     if (input.charAt(0) == 'P'){
       byte inputstate[14];
       byte a;
+      byte b[2];
       int adcval;
+      int dval;
       int plooper = 0;
 
       // Enter PROGRAMMING mode
@@ -136,6 +135,18 @@ void loop() {
       int addy = 0;
 
       Serial.print("DEBUG(enter PROGRAMMING mode)\n");
+      delay(200);
+
+      byte dump[16];
+      for (int i=0; i<EEPROM.length(); i++){
+        if (i > 0 && i % 16 == 0){
+          Serial.print("DEBUG(eeprom dump: 0x");
+          print_hex(dump, 16);
+          Serial.print(")\n");
+          delay(200);
+        }
+        dump[i%16] = EEPROM.read(i);
+      }
 
       // clear eeprom
       for (int i = 0; i < EEPROM.length(); i++) {
@@ -148,18 +159,13 @@ void loop() {
 
         // read first byte worth of digital inputs
         // ** NOTE: Don't use digital pins 0 or 1, because those are used by the serial port.
-        inputstate[0] = 0;
-        for (int i=2; i<8; i++){
+        dval = 0;
+        for (int i=2; i<13; i++){
           a = !digitalRead(i);
-          inputstate[0] |= (a << i);
+          dval |= (a << i);
         }
-
-        // read second byte worth of digital inputs
-        inputstate[1] = 0;
-        for (int i=0; i<5; i++){
-          a = !digitalRead(i+8);
-          inputstate[1] |= (a << i);
-        }
+        inputstate[0] = (byte)(dval/256);
+        inputstate[1] = (byte)(dval%256);
 
         // read analog inputs
         for (int i=0; i<6; i++){
@@ -177,26 +183,27 @@ void loop() {
           String pinput = Serial.readStringUntil('\n');
           if (pinput.charAt(0) == 'E') break;
 
+          delay(200);
+          Serial.print("DEBUG(received store keycode for 0x");
+          Serial.print(pinput.charAt(0), HEX);
+          Serial.print(")\n");
+
           // If we get to here, then the first byte on the serial must correspond to a keycode.
           // scan all the inputs and write keycode to eeprom.
 
           // Digital;
-          for (int i=2; i<8; i++){
-            boolean val = (inputstate[0] & (1 << i)) > 0;
-            if (val){
+          for (int i=2; i<13; i++){
+            if ((dval & (1 << i)) > 0){
               EEPROM.write(addy, 'D');
               EEPROM.write(addy+1, (byte)i);
               EEPROM.write(addy+2, pinput.charAt(0));
               addy+=3;
-            }
-          }
-          for (int i=0; i<5; i++){
-            boolean val = (inputstate[1] & (1 << i)) > 0;
-            if (val){
-              EEPROM.write(addy, 'D');
-              EEPROM.write(addy+1, (byte)(i+8));
-              EEPROM.write(addy+2, pinput.charAt(0));
-              addy+=3;
+              delay(200);
+              Serial.print("DEBUG(associating digital ");
+              Serial.print(i, HEX);
+              Serial.print(" with keycode 0x");
+              Serial.print(pinput.charAt(0), HEX);
+              Serial.print(")\n");
             }
           }
 
@@ -210,18 +217,26 @@ void loop() {
               EEPROM.write(addy+3, inputstate[2+(2*i)]);
               EEPROM.write(addy+4, inputstate[3+(2*i)]);
               addy+=5;
+              delay(200);
+              Serial.print("DEBUG(associating analog ");
+              Serial.print(i, HEX);
+              Serial.print(" value 0x");
+              print_hex(&inputstate[2+(2*i)], 2);
+              Serial.print(" with keycode 0x");
+              Serial.print(pinput.charAt(0), HEX);
+              Serial.print(")\n");
             }
           }
         }
         delay(500); // lets do this at half second intervals.
+        plooper++;
+        if (plooper == 1) digitalWrite(LED_BUILTIN, HIGH);
+        if (plooper >= 2){
+          digitalWrite(LED_BUILTIN, LOW);
+          plooper = 0;
+        }
       }
       load();
-      plooper++;
-      if (plooper == 1) digitalWrite(LED_BUILTIN, HIGH);
-      if (plooper >= 2){
-        digitalWrite(LED_BUILTIN, LOW);
-        plooper = 0;
-      }
     }
   }
 
@@ -243,7 +258,7 @@ void loop() {
   for (int i=0; i<6; i++){
     if (adc[i].entries > 0){
       int val = analogRead(i);
-      if (adc[i].down > -1 && (val > 1000 || abs(adc[i].value[adc[i].down] - val) < adcabs)){ // if button was down and turns off or changes
+      if (adc[i].down > -1 && (val > 1000 || abs(adc[i].value[adc[i].down] - val) > adcabs)){ // if button was down and turns off or changes
         send_serial(0, adc[i].keycode[adc[i].down]);
         adc[i].down = -1;
       }
@@ -260,6 +275,5 @@ void loop() {
   if (loopcounter >= 200){
     digitalWrite(LED_BUILTIN, LOW);
     loopcounter = 0;
-    Serial.print("DEBUG(writing end of loop debug)\n");
   }
 }
