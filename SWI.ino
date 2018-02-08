@@ -12,8 +12,6 @@
  * 1/(1/30 + 1/1.6) = 1.52 kohm.
  */
 
-//TODO PRINT LOTS OF DEBUG CODE TO SERIAL!!!
-
 #include <EEPROM.h>
 
 struct analogInput {
@@ -23,11 +21,13 @@ struct analogInput {
   int value[32];
 };
 
-struct analogInput adc[7];
+struct analogInput adc[6]; // there are actually 7 adc's, but A6 (the 7th) reads low.
 int adcabs = 10; // reasonable?
 
 byte d[13];
 byte d_down[13];
+
+int loopcounter = 0;
 
 void load(){
   for (int i=0; i<13; i++){
@@ -36,7 +36,7 @@ void load(){
   }
 
   // initialize adc structures
-  for (int i=0; i<7; i++){
+  for (int i=0; i<6; i++){
     adc[i].entries = 0;
     adc[i].down = -1; // because this is an index, values must start at 0. Negative means UP.
     for (int j=0; j<32; j++){
@@ -72,10 +72,11 @@ void load(){
 void setup() {
   while (!Serial);
   delay(500);
-  Serial.begin(115200);
+  Serial.begin(9600);
+  Serial.print("DEBUG(Begin serial output)\n");
 
   // Set all pins to input, pull up.
-  for (int i = 0; i < 13; i++){
+  for (int i = 2; i < 13; i++){
     pinMode(i, INPUT_PULLUP);
   }
   pinMode(A0, INPUT_PULLUP);
@@ -84,7 +85,8 @@ void setup() {
   pinMode(A3, INPUT_PULLUP);
   pinMode(A4, INPUT_PULLUP);
   pinMode(A5, INPUT_PULLUP);
-  pinMode(A6, INPUT_PULLUP);
+
+  pinMode(LED_BUILTIN, OUTPUT);
 
   load();
 }
@@ -100,33 +102,77 @@ void send_serial(boolean down, byte keycode){
   if (down) Serial.print("KEYDOWN(");
   else Serial.print("KEYUP(");
   Serial.print(keycode, HEX);
-  Serial.println(")");
+  Serial.println(")\n");
+}
+
+void print_hex(uint8_t *data, uint8_t length){
+  for (int i=0; i<length; i++){
+    if (data[i] < 0x10) Serial.print("0");
+    Serial.print(data[i],HEX);
+  }
 }
 
 void loop() {
   if (Serial.available() > 0){
+    Serial.print("DEBUG(data is available)\n");
     String input = Serial.readStringUntil('\n');
     if (input.charAt(0) == 'P'){
+      byte inputstate[14];
+      byte a;
+      int adcval;
+      int plooper = 0;
 
-      /* Enter PROGRAMMING mode
-       *
-       * The way the programming works is like this;
-       * 1) Send 'P\n" to enter programming mode.
-       * 2) Press and hold any key, while holding, send '{keycode}\n' where {keycode} is a byte
-       *    -- repeat step 2 for all keys.
-       * 3) Send 'E\n' to exit programming mode.
-       * 
-       * ** There is no abort/save option.
-       */
+      // Enter PROGRAMMING mode
+      //
+      // The way the programming works is like this;
+      // 1) Send 'P\n" to enter programming mode.
+      // 2) Press and hold any key, while holding, send '{keycode}\n' where {keycode} is a byte
+      //    -- repeat step 2 for all keys.
+      // 3) Send 'E\n' to exit programming mode.
+      //
+      // ** There is no abort/save option.
+      //
  
       int addy = 0;
+
+      Serial.print("DEBUG(enter PROGRAMMING mode)\n");
 
       // clear eeprom
       for (int i = 0; i < EEPROM.length(); i++) {
         EEPROM.write(i, 0);
       }
-    
+
+      Serial.print("DEBUG(cleared EEPROM)\n");
+
       while ( 1 ){
+
+        // read first byte worth of digital inputs
+        // ** NOTE: Don't use digital pins 0 or 1, because those are used by the serial port.
+        inputstate[0] = 0;
+        for (int i=2; i<8; i++){
+          a = !digitalRead(i);
+          inputstate[0] |= (a << i);
+        }
+
+        // read second byte worth of digital inputs
+        inputstate[1] = 0;
+        for (int i=0; i<5; i++){
+          a = !digitalRead(i+8);
+          inputstate[1] |= (a << i);
+        }
+
+        // read analog inputs
+        for (int i=0; i<6; i++){
+          adcval = analogRead(i);
+          inputstate[2+(2*i)] = (byte)(adcval/256);
+          inputstate[3+(2*i)] = (byte)(adcval%256);
+        }
+
+        // write input state to serial... 0x0000 03FF 03FF 03FF 03FF 03FF 03FF -- all switches OFF.
+        Serial.print("PINPUT(0x");
+        print_hex(inputstate, 14);
+        Serial.print(")\n");
+
         if (Serial.available() > 0){
           String pinput = Serial.readStringUntil('\n');
           if (pinput.charAt(0) == 'E') break;
@@ -135,11 +181,20 @@ void loop() {
           // scan all the inputs and write keycode to eeprom.
 
           // Digital;
-          for (int i=0; i<13; i++){
-            byte val = digitalRead(i);
-            if (val == 0){
+          for (int i=2; i<8; i++){
+            boolean val = (inputstate[0] & (1 << i)) > 0;
+            if (val){
               EEPROM.write(addy, 'D');
               EEPROM.write(addy+1, (byte)i);
+              EEPROM.write(addy+2, pinput.charAt(0));
+              addy+=3;
+            }
+          }
+          for (int i=0; i<5; i++){
+            boolean val = (inputstate[1] & (1 << i)) > 0;
+            if (val){
+              EEPROM.write(addy, 'D');
+              EEPROM.write(addy+1, (byte)(i+8));
               EEPROM.write(addy+2, pinput.charAt(0));
               addy+=3;
             }
@@ -147,25 +202,31 @@ void loop() {
 
           // Analog;
           for (int i=0; i<6; i++){
-            int val = analogRead(i);
+            int val = 256*inputstate[2+(2*i)] + inputstate[3+(2*i)];
             if (val < 1000){
               EEPROM.write(addy, 'A');
               EEPROM.write(addy+1, (byte)i);
               EEPROM.write(addy+2, pinput.charAt(0));
-              EEPROM.write(addy+3, (byte)(val/256));
-              EEPROM.write(addy+4, (byte)(val%256));
+              EEPROM.write(addy+3, inputstate[2+(2*i)]);
+              EEPROM.write(addy+4, inputstate[3+(2*i)]);
               addy+=5;
             }
           }
         }
-        delay(10);
+        delay(500); // lets do this at half second intervals.
       }
       load();
+      plooper++;
+      if (plooper == 1) digitalWrite(LED_BUILTIN, HIGH);
+      if (plooper >= 2){
+        digitalWrite(LED_BUILTIN, LOW);
+        plooper = 0;
+      }
     }
   }
 
   // start with DIGITAL
-  for (int i=0; i<13; i++){
+  for (int i=2; i<13; i++){
     if (d[i] > 0){
       int val = digitalRead(i); // 1 == off, 0 == on
       if (d_down[i] == 0 && val == 0){
@@ -194,5 +255,11 @@ void loop() {
   }
 
   delay(10);
-
+  loopcounter++;
+  if (loopcounter == 190) digitalWrite(LED_BUILTIN, HIGH);
+  if (loopcounter >= 200){
+    digitalWrite(LED_BUILTIN, LOW);
+    loopcounter = 0;
+    Serial.print("DEBUG(writing end of loop debug)\n");
+  }
 }
