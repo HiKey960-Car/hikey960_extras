@@ -64,22 +64,58 @@ void load(){
   }
 }
 
+// PWM output @ 25 kHz, only on pins 9 and 10.
+// Output value should be between 0 and 320, inclusive.
+void analogWrite25k(int pin, int value)
+{
+  Serial.print(value);
+  delay(200);
+    switch (pin) {
+        case 9:
+            OCR1A = value;
+            break;
+        case 10:
+            OCR1B = value;
+            break;
+        default:
+            // no other pin will work
+            break;
+    }
+}
+
+
 void setup() {
   while (!Serial);
   delay(500);
   Serial.begin(115200);
   Serial.print("DEBUG(Begin serial output)\n");
 
-  // Set all pins to input, pull up.
+  // Set all pins (except 9 and 10) to input, pull up.
   for (int i = 2; i < 13; i++){
-    pinMode(i, INPUT_PULLUP);
+    if (i != 9 && i != 10) pinMode(i, INPUT_PULLUP);
   }
+
   pinMode(A0, INPUT_PULLUP);
   pinMode(A1, INPUT_PULLUP);
   pinMode(A2, INPUT_PULLUP);
   pinMode(A3, INPUT_PULLUP);
   pinMode(A4, INPUT_PULLUP);
   pinMode(A5, INPUT_PULLUP);
+
+  // Configure Timer 1 for PWM @ 25 kHz.
+  TCCR1A = 0;           // undo the configuration done by...
+  TCCR1B = 0;           // ...the Arduino core library
+  TCNT1  = 0;           // reset timer
+  TCCR1A = _BV(COM1A1)  // non-inverted PWM on ch. A
+         | _BV(COM1B1)  // same on ch; B
+         | _BV(WGM11);  // mode 10: ph. correct PWM, TOP = ICR1
+  TCCR1B = _BV(WGM13)   // ditto
+         | _BV(CS10);   // prescaler = 1
+  ICR1   = 255;         // TOP = 255
+
+  // Set the PWM pins as output.
+  pinMode( 9, OUTPUT);
+  pinMode(10, OUTPUT);
 
   pinMode(LED_BUILTIN, OUTPUT);
 
@@ -111,9 +147,21 @@ void print_hex(uint8_t *data, uint8_t length){
 
 void loop() {
   if (Serial.available() > 0){
-    Serial.print("DEBUG(data is available)\n");
+    //Serial.print("DEBUG(data is available)\n");
     String input = Serial.readStringUntil('\n');
-    if (input.charAt(0) == 'P'){
+    Serial.print("DEBUG(First character:");
+    Serial.print(input.charAt(0), HEX);
+    Serial.print(")\n");
+    delay(200);
+    if (input.charAt(0) == 'T'){
+      // This is a FAN SPEED adjustment followed by 1 byte PWM level to set to D6
+      Serial.print("DEBUG(fan speed adjustment requested)\n");
+      delay(200);
+      analogWrite25k(9, (byte)input.charAt(1));
+    } else if (input.charAt(0) == 'B'){
+      // This is a BACKLIGHT LEVEL adjustment followed by 1 byte PWM level to set to D5
+      analogWrite25k(10, (byte)input.charAt(1));
+    } else if (input.charAt(0) == 'P'){
       byte inputstate[14];
       byte a;
       byte b[2];
@@ -242,7 +290,7 @@ void loop() {
 
   // start with DIGITAL
   for (int i=2; i<13; i++){
-    if (d[i] > 0){
+    if (i != 9 && i != 10 && d[i] > 0){
       int val = digitalRead(i); // 1 == off, 0 == on
       if (d_down[i] == 0 && val == 0){
         send_serial(1, d[i]);
