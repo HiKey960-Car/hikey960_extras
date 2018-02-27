@@ -68,8 +68,6 @@ void load(){
 // Output value should be between 0 and 320, inclusive.
 void analogWrite25k(int pin, int value)
 {
-  Serial.print(value);
-  delay(200);
     switch (pin) {
         case 9:
             OCR1A = value;
@@ -83,6 +81,36 @@ void analogWrite25k(int pin, int value)
     }
 }
 
+void setPwmFrequency(int pin, int divisor) {
+  byte mode;
+  if(pin == 5 || pin == 6 || pin == 9 || pin == 10) {
+    switch(divisor) {
+      case 1: mode = 0x01; break;
+      case 8: mode = 0x02; break;
+      case 64: mode = 0x03; break;
+      case 256: mode = 0x04; break;
+      case 1024: mode = 0x05; break;
+      default: return;
+    }
+    if(pin == 5 || pin == 6) {
+      TCCR0B = TCCR0B & 0b11111000 | mode;
+    } else {
+      TCCR1B = TCCR1B & 0b11111000 | mode;
+    }
+  } else if(pin == 3 || pin == 11) {
+    switch(divisor) {
+      case 1: mode = 0x01; break;
+      case 8: mode = 0x02; break;
+      case 32: mode = 0x03; break;
+      case 64: mode = 0x04; break;
+      case 128: mode = 0x05; break;
+      case 256: mode = 0x06; break;
+      case 1024: mode = 0x07; break;
+      default: return;
+    }
+    TCCR2B = TCCR2B & 0b11111000 | mode;
+  }
+}
 
 void setup() {
   while (!Serial);
@@ -92,7 +120,7 @@ void setup() {
 
   // Set all pins (except 9 and 10) to input, pull up.
   for (int i = 2; i < 13; i++){
-    if (i != 9 && i != 10) pinMode(i, INPUT_PULLUP);
+    if (i != 3 && i != 11) pinMode(i, INPUT_PULLUP);
   }
 
   pinMode(A0, INPUT_PULLUP);
@@ -102,20 +130,13 @@ void setup() {
   pinMode(A4, INPUT_PULLUP);
   pinMode(A5, INPUT_PULLUP);
 
-  // Configure Timer 1 for PWM @ 25 kHz.
-  TCCR1A = 0;           // undo the configuration done by...
-  TCCR1B = 0;           // ...the Arduino core library
-  TCNT1  = 0;           // reset timer
-  TCCR1A = _BV(COM1A1)  // non-inverted PWM on ch. A
-         | _BV(COM1B1)  // same on ch; B
-         | _BV(WGM11);  // mode 10: ph. correct PWM, TOP = ICR1
-  TCCR1B = _BV(WGM13)   // ditto
-         | _BV(CS10);   // prescaler = 1
-  ICR1   = 255;         // TOP = 255
-
   // Set the PWM pins as output.
-  pinMode( 9, OUTPUT);
-  pinMode(10, OUTPUT);
+  pinMode(11, OUTPUT);
+  pinMode(3, OUTPUT);
+
+  setPwmFrequency(3, 128); // any larger divisor than this makes it flicker
+  analogWrite(3, 255);
+  analogWrite(11, 255);
 
   pinMode(LED_BUILTIN, OUTPUT);
 
@@ -149,18 +170,13 @@ void loop() {
   if (Serial.available() > 0){
     //Serial.print("DEBUG(data is available)\n");
     String input = Serial.readStringUntil('\n');
-    Serial.print("DEBUG(First character:");
-    Serial.print(input.charAt(0), HEX);
-    Serial.print(")\n");
-    delay(200);
     if (input.charAt(0) == 'T'){
-      // This is a FAN SPEED adjustment followed by 1 byte PWM level to set to D6
-      Serial.print("DEBUG(fan speed adjustment requested)\n");
-      delay(200);
-      analogWrite25k(9, (byte)input.charAt(1));
+      // This is a FAN SPEED adjustment followed by 1 byte PWM level to set to D11
+      analogWrite(3, (byte)input.charAt(1));
     } else if (input.charAt(0) == 'B'){
-      // This is a BACKLIGHT LEVEL adjustment followed by 1 byte PWM level to set to D5
-      analogWrite25k(10, (byte)input.charAt(1));
+      // This is a BACKLIGHT LEVEL adjustment followed by 1 byte PWM level to set to D3
+      if (((byte)input.charAt(1)) < 0x10) analogWrite(3, 0x10);
+      else analogWrite(11, (byte)input.charAt(1));
     } else if (input.charAt(0) == 'P'){
       byte inputstate[14];
       byte a;
@@ -209,8 +225,10 @@ void loop() {
         // ** NOTE: Don't use digital pins 0 or 1, because those are used by the serial port.
         dval = 0;
         for (int i=2; i<13; i++){
-          a = !digitalRead(i);
-          dval |= (a << i);
+          if (i != 3 && i != 11){
+            a = !digitalRead(i);
+            dval |= (a << i);
+          }
         }
         inputstate[0] = (byte)(dval/256);
         inputstate[1] = (byte)(dval%256);
@@ -241,7 +259,7 @@ void loop() {
 
           // Digital;
           for (int i=2; i<13; i++){
-            if ((dval & (1 << i)) > 0){
+            if (i != 3 && i != 11 && (dval & (1 << i)) > 0){
               EEPROM.write(addy, 'D');
               EEPROM.write(addy+1, (byte)i);
               EEPROM.write(addy+2, pinput.charAt(0));
@@ -290,7 +308,7 @@ void loop() {
 
   // start with DIGITAL
   for (int i=2; i<13; i++){
-    if (i != 9 && i != 10 && d[i] > 0){
+    if (i != 3 && i != 11 && d[i] > 0){
       int val = digitalRead(i); // 1 == off, 0 == on
       if (d_down[i] == 0 && val == 0){
         send_serial(1, d[i]);
