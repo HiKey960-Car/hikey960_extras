@@ -28,6 +28,8 @@ byte d[13];
 byte d_down[13];
 
 int loopcounter = 0;
+unsigned long acccounter = 0;
+int accon = 1;
 
 void load(){
   for (int i=0; i<13; i++){
@@ -118,10 +120,17 @@ void setup() {
   Serial.begin(115200);
   Serial.print("DEBUG(Begin serial output)\n");
 
-  // Set all pins (except 9 and 10) to input, pull up.
+  // Set all pins (except 3, 4, 8, and 11) to input, pull up.
   for (int i = 2; i < 13; i++){
-    if (i != 3 && i != 11) pinMode(i, INPUT_PULLUP);
+    if (i != 3 && i != 8 && i != 11) pinMode(i, INPUT_PULLUP);
   }
+
+  // Pin D4 is our relay control.
+  pinMode(4, OUTPUT);
+  digitalWrite(4, HIGH);
+
+  // Pin D8 is our ACC signal.
+  pinMode(8, INPUT);
 
   pinMode(A0, INPUT_PULLUP);
   pinMode(A1, INPUT_PULLUP);
@@ -167,6 +176,24 @@ void print_hex(uint8_t *data, uint8_t length){
 }
 
 void loop() {
+
+  // Deal with system power control first. If the ACC line goes off, store the time when
+  // we should shut down. When the time is reached, shut down. ACC line is connected to D8,
+  // Power control is connected to D4.
+  if (digitalRead(8) == 1){
+    if (accon == 0) Serial.print("ACC(1)\n"); // notify ACC turned on
+    accon = 1;
+    digitalWrite(4, HIGH);
+  } else {
+    if (accon == 1){
+      Serial.print("ACC(0)\n"); // notify ACC turned off
+      acccounter = millis() + 30000;
+      accon = 0;
+    } else if (millis() > acccounter){
+      digitalWrite(4, LOW);
+    }
+  }
+  
   if (Serial.available() > 0){
     //Serial.print("DEBUG(data is available)\n");
     String input = Serial.readStringUntil('\n');
@@ -201,7 +228,7 @@ void loop() {
       Serial.print("DEBUG(enter PROGRAMMING mode)\n");
       delay(200);
 
-      byte dump[16];
+      /*byte dump[16];
       for (int i=0; i<EEPROM.length(); i++){
         if (i > 0 && i % 16 == 0){
           Serial.print("DEBUG(eeprom dump: 0x");
@@ -210,7 +237,7 @@ void loop() {
           delay(200);
         }
         dump[i%16] = EEPROM.read(i);
-      }
+      }*/
 
       // clear eeprom
       for (int i = 0; i < EEPROM.length(); i++) {
@@ -225,7 +252,7 @@ void loop() {
         // ** NOTE: Don't use digital pins 0 or 1, because those are used by the serial port.
         dval = 0;
         for (int i=2; i<13; i++){
-          if (i != 3 && i != 11){
+          if (i != 3 && i != 4 && i != 8 && i != 11){
             a = !digitalRead(i);
             dval |= (a << i);
           }
@@ -259,7 +286,7 @@ void loop() {
 
           // Digital;
           for (int i=2; i<13; i++){
-            if (i != 3 && i != 11 && (dval & (1 << i)) > 0){
+            if (i != 3 && i != 4 && i != 8 && i != 11 && (dval & (1 << i)) > 0){
               EEPROM.write(addy, 'D');
               EEPROM.write(addy+1, (byte)i);
               EEPROM.write(addy+2, pinput.charAt(0));
@@ -308,7 +335,7 @@ void loop() {
 
   // start with DIGITAL
   for (int i=2; i<13; i++){
-    if (i != 3 && i != 11 && d[i] > 0){
+    if (i != 3 && i != 4 && i != 8 && i != 11 && d[i] > 0){
       int val = digitalRead(i); // 1 == off, 0 == on
       if (d_down[i] == 0 && val == 0){
         send_serial(1, d[i]);
